@@ -2,196 +2,134 @@ import os
 import json
 import random
 import string
-import threading
-import asyncio
+import logging
 from datetime import datetime, timedelta
-from flask import Flask
-from telegram import Update, Bot
+from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler,
-    ContextTypes
+    ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 )
+from flask import Flask
+from threading import Thread
+from dotenv import load_dotenv
 
-# 🔐 Replace this with your real Telegram user ID
-ADMIN_ID = 123456789  # <-- CHANGE THIS
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # <-- CHANGE THIS
+# === LOAD ENV ===
+load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-app = Flask(__name__)
+# === LOGGING ===
+logging.basicConfig(level=logging.INFO)
+
+# === FILE PATHS ===
+KEY_FILE = "keys.json"
+PREMIUM_FILE = "premium_users.json"
+
+# === FLASK SERVER ===
+app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot is live"
+    return "Bot is running!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
 
-# 🚀 /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Welcome to Aizen Bot ✨\nUse This Command /redeem"
-    )
+Thread(target=run_flask).start()
 
-# 🎟️ /redeem
-async def redeem(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    args = " ".join(context.args)
-    if not args:
-        await update.message.reply_text("❌ Please use like /redeem your_message_here")
-        return
+# === UTILS ===
+def load_json(file):
+    try:
+        with open(file, 'r') as f:
+            return json.load(f)
+    except:
+        return {}
 
-    await update.message.reply_text("Processing 🗝️")
-    user = update.effective_user
-    text = f"📩 New Redeem Request:\nFrom: {user.full_name} (@{user.username})\nUserID: {user.id}\n\nMessage:\n{args}"
-    await context.bot.send_message(chat_id=ADMIN_ID, text=text)
+def save_json(file, data):
+    with open(file, 'w') as f:
+        json.dump(data, f, indent=2)
 
-# 📥 /reply
-async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-
-    if len(context.args) < 2:
-        await update.message.reply_text("Usage: /reply user_id your_message")
-        return
-
-    user_id = int(context.args[0])
-    msg = " ".join(context.args[1:])
-    await context.bot.send_message(chat_id=user_id, text=msg)
-    await update.message.reply_text("✅ Message sent.")
-
-# 📢 /broadcast
-async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-
-    message = " ".join(context.args)
-    if not message:
-        await update.message.reply_text("❌ Usage: /broadcast your_message")
-        return
-
-    if os.path.exists("premium_users.json"):
-        with open("premium_users.json", "r") as f:
-            users = json.load(f)
-        for uid in users:
-            try:
-                await context.bot.send_message(chat_id=int(uid), text=message)
-            except:
-                pass
-
-    await update.message.reply_text("✅ Broadcast sent.")
-
-# 🔑 /genk
-def generate_key(length=8):
+def generate_key(length=12):
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
+
+# === HANDLERS ===
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Welcome to Aizen Bot ✨\nUse this command /redeem")
+
+async def redeem(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Enter key 🗝️")
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.message.from_user.id)
+    text = update.message.text.strip()
+    keys = load_json(KEY_FILE)
+    users = load_json(PREMIUM_FILE)
+
+    if text in keys:
+        days = keys[text]
+        expiry_date = (datetime.now() + timedelta(days=days)).strftime('%Y-%m-%d')
+        users[user_id] = expiry_date
+        save_json(PREMIUM_FILE, users)
+
+        del keys[text]
+        save_json(KEY_FILE, keys)
+
+        await update.message.reply_text(f"✅ Premium Activated Till: {expiry_date}")
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"🔔 User {user_id} redeemed a key for {days} days.\nExpiry: {expiry_date}"
+        )
+    else:
+        await update.message.reply_text("❌ Invalid Key.")
 
 async def genk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
 
-    if not context.args or not context.args[0].isdigit():
+    try:
+        days = int(context.args[0])
+    except:
         await update.message.reply_text("❌ Usage: /genk <days>")
         return
 
-    days = int(context.args[0])
     key = generate_key()
-    expiry = (datetime.utcnow() + timedelta(days=days)).isoformat()
+    keys = load_json(KEY_FILE)
+    keys[key] = days
+    save_json(KEY_FILE, keys)
 
-    keys = {}
-    if os.path.exists("keys.json"):
-        with open("keys.json", "r") as f:
-            keys = json.load(f)
-
-    keys[key] = expiry
-
-    with open("keys.json", "w") as f:
-        json.dump(keys, f)
-
-    await update.message.reply_text(f"🗝️ Generated Key: `{key}` (Valid {days} days)", parse_mode="Markdown")
-
-# 🧑‍💻 /premium
-async def premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("❌ Please enter a key like: /premium YOUR_KEY")
-        return
-
-    input_key = context.args[0].strip().upper()
-    user = update.effective_user
-
-    if not os.path.exists("keys.json"):
-        await update.message.reply_text("❌ Invalid Key")
-        return
-
-    with open("keys.json", "r") as f:
-        keys = json.load(f)
-
-    if input_key not in keys:
-        await update.message.reply_text("❌ Invalid Key")
-        return
-
-    expiry = keys[input_key]
-    del keys[input_key]
-    with open("keys.json", "w") as f:
-        json.dump(keys, f)
-
-    users = {}
-    if os.path.exists("premium_users.json"):
-        with open("premium_users.json", "r") as f:
-            users = json.load(f)
-
-    users[str(user.id)] = expiry
-    with open("premium_users.json", "w") as f:
-        json.dump(users, f)
-
-    await update.message.reply_text("✅ Access Granted. Welcome to Premium 🔥")
-
-    msg = (
-        f"🔐 New Premium Activation:\n"
-        f"User: {user.full_name} (@{user.username})\n"
-        f"UserID: {user.id}\n"
-        f"Valid Until: {expiry}"
+    await update.message.reply_text(
+        f"✅ Key Generated:\n`{key}`\nValid for {days} days.",
+        parse_mode="Markdown"
     )
-    await context.bot.send_message(chat_id=ADMIN_ID, text=msg)
 
-# ⏰ Auto check expiry every 24h
-async def check_premium_expiry(bot: Bot):
-    while True:
-        users = {}
-        if os.path.exists("premium_users.json"):
-            with open("premium_users.json", "r") as f:
-                users = json.load(f)
+async def check_expired(context: ContextTypes.DEFAULT_TYPE):
+    users = load_json(PREMIUM_FILE)
+    expired = []
 
-        updated_users = {}
-        now = datetime.utcnow()
+    for user_id, expiry_str in list(users.items()):
+        expiry_date = datetime.strptime(expiry_str, '%Y-%m-%d')
+        if datetime.now() > expiry_date:
+            expired.append(user_id)
+            del users[user_id]
+            try:
+                await context.bot.send_message(
+                    chat_id=int(user_id),
+                    text="⚠️ Your Premium Has Ended 👋"
+                )
+            except:
+                pass
 
-        for uid, exp in users.items():
-            if datetime.fromisoformat(exp) <= now:
-                try:
-                    await bot.send_message(chat_id=int(uid), text="👋 Your premium has ended.")
-                except:
-                    pass
-            else:
-                updated_users[uid] = exp
+    if expired:
+        save_json(PREMIUM_FILE, users)
 
-        with open("premium_users.json", "w") as f:
-            json.dump(updated_users, f)
+# === MAIN ===
+app_ = ApplicationBuilder().token(BOT_TOKEN).build()
 
-        await asyncio.sleep(86400)  # 24h
+app_.add_handler(CommandHandler("start", start))
+app_.add_handler(CommandHandler("redeem", redeem))
+app_.add_handler(CommandHandler("genk", genk))
+app_.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# 🚀 Main
-if __name__ == "__main__":
-    flask_thread = threading.Thread(target=run_flask)
-    flask_thread.daemon = True
-    flask_thread.start()
+# Daily expiry check
+app_.job_queue.run_repeating(check_expired, interval=86400, first=10)
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("redeem", redeem))
-    app.add_handler(CommandHandler("reply", reply))
-    app.add_handler(CommandHandler("broadcast", broadcast))
-    app.add_handler(CommandHandler("genk", genk))
-    app.add_handler(CommandHandler("premium", premium))
-
-    # 🔄 Expiry checker
-    bot_instance = Bot(BOT_TOKEN)
-    app.job_queue.run_once(lambda *_: asyncio.create_task(check_premium_expiry(bot_instance)), 1)
-
-    app.run_polling()
+app_.run_polling()
