@@ -10,21 +10,16 @@ from telegram.ext import (
 )
 from flask import Flask
 from threading import Thread
-from dotenv import load_dotenv
 
-# === LOAD ENV ===
-load_dotenv()
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
+# === CONFIG ===
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
+ADMIN_ID = 123456789  # Your Telegram ID
 
-# === LOGGING ===
-logging.basicConfig(level=logging.INFO)
-
-# === FILE PATHS ===
+# === FILES ===
 KEY_FILE = "keys.json"
 PREMIUM_FILE = "premium_users.json"
 
-# === FLASK SERVER ===
+# === FLASK KEEP-ALIVE ===
 app = Flask('')
 
 @app.route('/')
@@ -36,16 +31,19 @@ def run_flask():
 
 Thread(target=run_flask).start()
 
+# === LOGGING ===
+logging.basicConfig(level=logging.INFO)
+
 # === UTILS ===
 def load_json(file):
     try:
-        with open(file, 'r') as f:
+        with open(file, "r") as f:
             return json.load(f)
     except:
         return {}
 
 def save_json(file, data):
-    with open(file, 'w') as f:
+    with open(file, "w") as f:
         json.dump(data, f, indent=2)
 
 def generate_key(length=12):
@@ -53,7 +51,7 @@ def generate_key(length=12):
 
 # === HANDLERS ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Welcome to Aizen Bot ✨\nUse this command /redeem")
+    await update.message.reply_text("Welcome to Aizen Bot ✨\nUse This Command /redeem")
 
 async def redeem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Enter key 🗝️")
@@ -76,7 +74,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ Premium Activated Till: {expiry_date}")
         await context.bot.send_message(
             chat_id=ADMIN_ID,
-            text=f"🔔 User {user_id} redeemed a key for {days} days.\nExpiry: {expiry_date}"
+            text=f"🔔 User {user_id} redeemed a key for {days} days.\nExpires: {expiry_date}"
         )
     else:
         await update.message.reply_text("❌ Invalid Key.")
@@ -129,7 +127,7 @@ app_.add_handler(CommandHandler("redeem", redeem))
 app_.add_handler(CommandHandler("genk", genk))
 app_.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# Daily expiry check
+# Schedule expiry check once a day
 app_.job_queue.run_repeating(check_expired, interval=86400, first=10)
 
 app_.run_polling()
